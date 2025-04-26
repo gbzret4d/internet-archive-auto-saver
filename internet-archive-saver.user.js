@@ -1,17 +1,18 @@
 // ==UserScript==
 // @name         Internet Archive Saver
-// @description  Saves every visited page to the Internet Archive if it hasn't been saved in the last 4 hours, showing smaller FontAwesome icons as status badges and additional console logs when archiving is needed or started. / Speichert jede besuchte Seite im Internet Archive, falls sie nicht in den letzten 4 Stunden gespeichert wurde, mit kleineren FontAwesome-Icons als Statusanzeigen und zusätzlichen Konsolenlogs.
+// @description  Saves every visited page to the Internet Archive if it hasn't been saved in the last 4 hours, showing smaller FontAwesome icons as status badges and additional console logs when archiving is needed or started.
 // @namespace    https://github.com/gbzret4d/internet-archive-auto-saver
 // @homepage     https://github.com/gbzret4d/internet-archive-auto-saver
 // @updateURL    https://raw.githubusercontent.com/gbzret4d/internet-archive-auto-saver/main/internet-archive-saver.user.js
 // @downloadURL  https://raw.githubusercontent.com/gbzret4d/internet-archive-auto-saver/main/internet-archive-saver.user.js
 // @author       gbzret4d
-// @version      1.0
+// @version      1.1
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
 // @connect      raw.githubusercontent.com
+// @connect      web.archive.org
 // @noframes
 // @match        *://*/*
 // ==/UserScript==
@@ -19,11 +20,20 @@
 (function() {
     'use strict';
 
-    // --- Configuration / Konfiguration ---
-    const LOAD_EXTERNAL_BLACKLIST = true; // Set to false to disable loading external blacklist / Setze auf false, um externe Blacklist zu deaktivieren
+    // --- Configuration ---
+    const LOAD_EXTERNAL_BLACKLIST = true;
     const EXTERNAL_BLACKLIST_URL = 'https://raw.githubusercontent.com/gbzret4d/internet-archive-auto-saver/main/blacklist.json';
 
-    // Inject FontAwesome CSS from CDNJS / FontAwesome CSS von CDNJS einfügen
+    const BLACKLIST_KEY = 'ia_saver_blacklist';
+    const CACHE_KEY_PREFIX = 'ia_saver_cache_';
+    const CACHE_DURATION_MS = 30 * 60 * 1000; // 30 minutes cache duration
+
+    const ARCHIVE_CHECK_URL = 'https://archive.org/wayback/available?url=';
+    const ARCHIVE_SAVE_URL = 'https://web.archive.org/save/';
+
+    const SHOW_BADGES = true;
+
+    // Inject FontAwesome CSS
     function injectFontAwesome() {
         if (document.getElementById('fontawesome-css')) return;
         const link = document.createElement('link');
@@ -35,35 +45,23 @@
     }
     injectFontAwesome();
 
-    const SHOW_BADGES = true; // Show status badges / Status-Badges anzeigen
-    const ARCHIVE_CHECK_URL = 'https://archive.org/wayback/available?url=';
-    const ARCHIVE_SAVE_URL = 'https://web.archive.org/save/';
-    const FOUR_HOURS_MS = 4 * 60 * 60 * 1000; // 4 hours in milliseconds / 4 Stunden in Millisekunden
-
-    const BLACKLIST_KEY = 'ia_saver_blacklist';
-
-    // Local blacklist stored in userscript manager / Lokale Blacklist im Userscript-Manager gespeichert
+    // Load local blacklist or initialize
     let localBlacklist = GM_getValue(BLACKLIST_KEY, []);
-
-    // Convert old string array format to new object format if necessary / Konvertiere altes Format in neues Format
     if (localBlacklist.length && typeof localBlacklist[0] === 'string') {
         localBlacklist = localBlacklist.map(pat => ({ pattern: pat, mode: 'domain' }));
         GM_setValue(BLACKLIST_KEY, localBlacklist);
     }
 
-    // External blacklist loaded from URL (read-only) / Externe Blacklist geladen von URL (nur lesbar)
     let externalBlacklist = [];
-
-    // Combined blacklist (local + external) / Kombinierte Blacklist (lokal + extern)
     let combinedBlacklist = [];
 
-    // Load external blacklist from URL if enabled / Lade externe Blacklist, falls aktiviert
-    function loadExternalBlacklist() {
-        return new Promise((resolve) => {
-            if (!LOAD_EXTERNAL_BLACKLIST || !EXTERNAL_BLACKLIST_URL) {
-                resolve([]);
-                return;
-            }
+    // Utility: sleep
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+    // Load external blacklist
+    async function loadExternalBlacklist() {
+        if (!LOAD_EXTERNAL_BLACKLIST || !EXTERNAL_BLACKLIST_URL) return [];
+        return new Promise(resolve => {
             GM_xmlhttpRequest({
                 method: 'GET',
                 url: EXTERNAL_BLACKLIST_URL,
@@ -71,30 +69,30 @@
                     if (response.status === 200) {
                         try {
                             const data = JSON.parse(response.responseText);
-                            if (Array.isArray(data) && data.every(e => e.pattern && e.mode && ['domain','prefix','exact'].includes(e.mode))) {
+                            if (Array.isArray(data) && data.every(e => e.pattern && e.mode && ['domain', 'prefix', 'exact'].includes(e.mode))) {
                                 resolve(data);
                             } else {
-                                console.warn('[IA Saver] Invalid external blacklist format / Ungültiges Format der externen Blacklist');
+                                console.warn('[IA Saver] Invalid external blacklist format');
                                 resolve([]);
                             }
-                        } catch(e) {
-                            console.warn('[IA Saver] Failed to parse external blacklist JSON / Externe Blacklist JSON konnte nicht geparst werden', e);
+                        } catch {
+                            console.warn('[IA Saver] Could not parse external blacklist JSON');
                             resolve([]);
                         }
                     } else {
-                        console.warn('[IA Saver] Failed to load external blacklist, status: ' + response.status + ' / Externe Blacklist konnte nicht geladen werden, Status: ' + response.status);
+                        console.warn('[IA Saver] Failed to load external blacklist, status:', response.status);
                         resolve([]);
                     }
                 },
                 onerror: function() {
-                    console.warn('[IA Saver] Error loading external blacklist / Fehler beim Laden der externen Blacklist');
+                    console.warn('[IA Saver] Error loading external blacklist');
                     resolve([]);
                 }
             });
         });
     }
 
-    // Merge local and external blacklists, avoiding duplicates / Füge lokale und externe Blacklists zusammen, ohne Duplikate
+    // Merge blacklists avoiding duplicates
     function mergeBlacklists(localList, externalList) {
         const combined = [...localList];
         for (const extEntry of externalList) {
@@ -105,7 +103,7 @@
         return combined;
     }
 
-    // Check if URL is blacklisted in combined list / Prüfe, ob URL auf Blacklist steht (kombiniert)
+    // Check if URL is blacklisted
     function isBlacklisted(url) {
         try {
             const u = new URL(url);
@@ -125,13 +123,166 @@
                 }
                 return false;
             });
-        } catch(e) {
-            console.warn('[IA Saver] Invalid URL in blacklist check / Ungültige URL bei Blacklist-Prüfung:', url, e);
+        } catch {
             return false;
         }
     }
 
-    // Blacklist GUI (only local blacklist editable) / Blacklist-GUI (nur lokale Blacklist bearbeitbar)
+    // Cache management
+    function getCachedArchiveInfo(url) {
+        const cacheStr = GM_getValue(CACHE_KEY_PREFIX + url, null);
+        if (!cacheStr) return null;
+        try {
+            const cache = JSON.parse(cacheStr);
+            if (Date.now() - cache.timestamp < CACHE_DURATION_MS) {
+                return cache.data;
+            }
+            return null;
+        } catch {
+            return null;
+        }
+    }
+    function setCachedArchiveInfo(url, data) {
+        const cache = { timestamp: Date.now(), data };
+        GM_setValue(CACHE_KEY_PREFIX + url, JSON.stringify(cache));
+    }
+
+    // Show status badge
+    function showBadge(bgColor, tooltip, faIconClass, link) {
+        if (!SHOW_BADGES) return;
+        const existing = document.getElementById('ia-saver-badge');
+        if (existing) existing.remove();
+
+        const badge = document.createElement('div');
+        badge.id = 'ia-saver-badge';
+        badge.style.position = 'fixed';
+        badge.style.bottom = '5px';
+        badge.style.right = '5px';
+        badge.style.backgroundColor = bgColor;
+        badge.style.color = '#fff';
+        badge.style.padding = '4px';
+        badge.style.fontSize = '16px';
+        badge.style.fontFamily = 'Arial, sans-serif';
+        badge.style.borderRadius = '50%';
+        badge.style.width = '26px';
+        badge.style.height = '26px';
+        badge.style.display = 'flex';
+        badge.style.alignItems = 'center';
+        badge.style.justifyContent = 'center';
+        badge.style.cursor = link ? 'pointer' : 'default';
+        badge.title = tooltip;
+        badge.style.zIndex = 2147483647;
+
+        if (faIconClass) {
+            const icon = document.createElement('i');
+            icon.className = faIconClass;
+            badge.appendChild(icon);
+        } else {
+            badge.textContent = '?';
+        }
+
+        if (link) {
+            badge.addEventListener('click', () => {
+                window.open(link, '_blank');
+            });
+        }
+
+        document.body.appendChild(badge);
+    }
+
+    // Parse archive.org timestamp
+    function parseTimestamp(ts) {
+        const year = ts.substr(0, 4);
+        const month = ts.substr(4, 2);
+        const day = ts.substr(6, 2);
+        const hour = ts.substr(8, 2);
+        const min = ts.substr(10, 2);
+        const sec = ts.substr(12, 2);
+        return Date.UTC(year, month - 1, day, hour, min, sec);
+    }
+
+    // Check archive status and archive if needed
+    async function checkAndArchive(url) {
+        if (isBlacklisted(url)) {
+            console.log('[IA Saver] URL blacklisted, skipping:', url);
+            showBadge('gray', 'Archiving skipped (blacklist) ⛔', 'fas fa-ban');
+            return;
+        }
+
+        const cached = getCachedArchiveInfo(url);
+        if (cached) {
+            const lastTs = cached.archived_snapshots?.closest?.timestamp;
+            if (lastTs) {
+                const lastArchiveDate = parseTimestamp(lastTs);
+                if (Date.now() - lastArchiveDate < 4 * 60 * 60 * 1000) {
+                    console.log('[IA Saver] Recently archived (cached), skipping:', url);
+                    showBadge('darkorange', 'Recently archived (cached) 🕒', 'fas fa-clock', `https://web.archive.org/web/${lastTs}/${url}`);
+                    return;
+                }
+            }
+        }
+
+        showBadge('#007bff', 'Checking archive status... 🔄', 'fas fa-spinner fa-spin');
+
+        const data = await new Promise(resolve => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: ARCHIVE_CHECK_URL + encodeURIComponent(url),
+                onload: res => {
+                    try {
+                        resolve(JSON.parse(res.responseText));
+                    } catch {
+                        resolve(null);
+                    }
+                },
+                onerror: () => resolve(null),
+            });
+        });
+
+        setCachedArchiveInfo(url, data);
+
+        if (!data || !data.archived_snapshots || !data.archived_snapshots.closest) {
+            console.log('[IA Saver] No archive found, archiving now:', url);
+            archiveUrl(url);
+            return;
+        }
+
+        const lastTimestamp = data.archived_snapshots.closest.timestamp;
+        const lastArchiveTime = parseTimestamp(lastTimestamp);
+
+        if (Date.now() - lastArchiveTime > 4 * 60 * 60 * 1000) {
+            console.log('[IA Saver] Archive outdated, archiving now:', url);
+            archiveUrl(url);
+        } else {
+            console.log('[IA Saver] Archive up to date:', url);
+            showBadge('darkorange', `Recently archived: ${new Date(lastArchiveTime).toLocaleString()} 🕒`, 'fas fa-clock', `https://web.archive.org/web/${lastTimestamp}/${url}`);
+        }
+    }
+
+    // Archive URL
+    function archiveUrl(url) {
+        showBadge('#28a745', 'Archiving now... ⏳', 'fas fa-upload');
+
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: ARCHIVE_SAVE_URL + encodeURIComponent(url),
+            onload: res => {
+                if (res.status >= 200 && res.status < 300) {
+                    console.log('[IA Saver] Archived successfully:', url);
+                    showBadge('green', 'Archived successfully ✅', 'fas fa-check', `https://web.archive.org/web/*/${url}`);
+                } else {
+                    console.error('[IA Saver] Archive failed:', res.status, res.statusText);
+                    showBadge('red', 'Archive failed ❗', 'fas fa-exclamation-triangle');
+                }
+            },
+            onerror: () => {
+                console.error('[IA Saver] Archive request failed');
+                showBadge('red', 'Archive request failed ❗', 'fas fa-exclamation-triangle');
+            }
+        });
+    }
+
+    // Blacklist GUI with import/export
     function createBlacklistGUI() {
         if (!document.body) {
             document.addEventListener('DOMContentLoaded', createBlacklistGUI);
@@ -156,6 +307,7 @@
         panel.style.userSelect = 'none';
         panel.style.display = 'none';
 
+        // Title and close button
         const titleBar = document.createElement('div');
         titleBar.style.display = 'flex';
         titleBar.style.justifyContent = 'space-between';
@@ -169,7 +321,7 @@
 
         const closeBtn = document.createElement('button');
         closeBtn.textContent = '×';
-        closeBtn.title = 'Close / Schließen';
+        closeBtn.title = 'Close';
         closeBtn.style.background = 'transparent';
         closeBtn.style.border = 'none';
         closeBtn.style.color = '#fff';
@@ -184,22 +336,24 @@
         titleBar.appendChild(closeBtn);
         panel.appendChild(titleBar);
 
+        // Instructions
         const infoText = document.createElement('div');
         infoText.style.fontSize = '12px';
         infoText.style.color = '#ccc';
         infoText.style.marginBottom = '10px';
         infoText.innerHTML = `
             Add blacklist entries:<br>
-            Domain: blocks all pages on the domain and its subdomains (e.g. <i>google.com</i>).<br>
-            Prefix: blocks all URLs starting with the pattern (use * at the end, e.g. <i>https://www.google.com/search*</i>).<br>
-            Exact: blocks only the exact URL (e.g. <i>https://www.google.com/search?q=test</i>).<br>
-            Beispiele / Examples:<br>
+            <b>Domain:</b> blocks all pages on the domain and its subdomains (e.g. <i>google.com</i>).<br>
+            <b>Prefix:</b> blocks all URLs starting with the pattern (use * at the end, e.g. <i>https://www.google.com/search*</i>).<br>
+            <b>Exact:</b> blocks only the exact URL (e.g. <i>https://www.google.com/search?q=test</i>).<br>
+            Examples:<br>
             • domain: google.com<br>
             • prefix: https://www.google.com/search*<br>
             • exact: https://www.google.com/search?q=test&ie=UTF-8
         `;
         panel.appendChild(infoText);
 
+        // Input area
         const inputContainer = document.createElement('div');
         inputContainer.style.marginBottom = '10px';
         inputContainer.style.display = 'flex';
@@ -208,33 +362,24 @@
 
         const input = document.createElement('input');
         input.type = 'text';
-        input.placeholder = 'Domain, prefix* or exact URL / Domain, Präfix* oder exakte URL';
+        input.placeholder = 'Domain, prefix* or exact URL';
         input.style.flexGrow = '1';
         input.style.minWidth = '170px';
         input.style.padding = '6px';
 
         const select = document.createElement('select');
         select.style.padding = '6px';
-        select.title = 'Select blacklist mode / Blacklist-Modus wählen';
+        select.title = 'Select blacklist mode';
 
-        const optionDomain = document.createElement('option');
-        optionDomain.value = 'domain';
-        optionDomain.textContent = 'Domain';
-
-        const optionPrefix = document.createElement('option');
-        optionPrefix.value = 'prefix';
-        optionPrefix.textContent = 'Prefix';
-
-        const optionExact = document.createElement('option');
-        optionExact.value = 'exact';
-        optionExact.textContent = 'Exact';
-
-        select.appendChild(optionDomain);
-        select.appendChild(optionPrefix);
-        select.appendChild(optionExact);
+        ['domain', 'prefix', 'exact'].forEach(mode => {
+            const option = document.createElement('option');
+            option.value = mode;
+            option.textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
+            select.appendChild(option);
+        });
 
         const addButton = document.createElement('button');
-        addButton.textContent = 'Add / Hinzufügen';
+        addButton.textContent = 'Add';
         addButton.style.cursor = 'pointer';
         addButton.style.padding = '6px 12px';
 
@@ -243,6 +388,7 @@
         inputContainer.appendChild(addButton);
         panel.appendChild(inputContainer);
 
+        // List of entries
         const list = document.createElement('ul');
         list.style.listStyle = 'none';
         list.style.padding = '0';
@@ -257,7 +403,7 @@
             list.innerHTML = '';
             if (localBlacklist.length === 0) {
                 const li = document.createElement('li');
-                li.textContent = 'No entries in blacklist. / Keine Einträge in der Blacklist.';
+                li.textContent = 'No entries in blacklist.';
                 li.style.fontStyle = 'italic';
                 li.style.color = '#aaa';
                 list.appendChild(li);
@@ -277,7 +423,7 @@
 
                 const delBtn = document.createElement('button');
                 delBtn.textContent = 'X';
-                delBtn.title = 'Remove this entry / Entfernen';
+                delBtn.title = 'Remove this entry';
                 delBtn.style.background = 'red';
                 delBtn.style.color = 'white';
                 delBtn.style.border = 'none';
@@ -323,14 +469,14 @@
 
             if (!validateInput(val, mode)) {
                 alert('Invalid input for mode "' + mode + '".\n' +
-                      (mode === 'domain' ? 'Enter a valid domain (e.g. example.com)' :
-                       mode === 'prefix' ? 'Enter a valid URL that starts with http(s) and ends with * (e.g. https://example.com/path*)' :
-                       'Enter a valid full URL without * (e.g. https://example.com/page)'));
+                    (mode === 'domain' ? 'Enter a valid domain (e.g. example.com)' :
+                        mode === 'prefix' ? 'Enter a valid URL that starts with http(s) and ends with * (e.g. https://example.com/path*)' :
+                            'Enter a valid full URL without * (e.g. https://example.com/page)'));
                 return;
             }
 
             if (localBlacklist.some(e => e.pattern === val && e.mode === mode)) {
-                alert('This entry is already in the blacklist. / Dieser Eintrag ist bereits in der Blacklist.');
+                alert('This entry is already in the blacklist.');
                 return;
             }
 
@@ -342,12 +488,12 @@
         });
 
         refreshList();
-
         addExportImportButtons(panel);
 
         document.body.appendChild(panel);
     }
 
+    // Toggle GUI visibility
     function toggleBlacklistGUI() {
         let panel = document.getElementById('ia-saver-blacklist-panel');
         if (!panel) {
@@ -361,6 +507,7 @@
         panel.style.display = (panel.style.display === 'none' || panel.style.display === '') ? 'block' : 'none';
     }
 
+    // Add export/import buttons
     function addExportImportButtons(panel) {
         if (!panel) return;
 
@@ -370,13 +517,13 @@
         container.style.gap = '10px';
 
         const exportBtn = document.createElement('button');
-        exportBtn.textContent = 'Export Blacklist / Blacklist exportieren';
+        exportBtn.textContent = 'Export Blacklist';
         exportBtn.style.flex = '1';
         exportBtn.style.cursor = 'pointer';
         exportBtn.onclick = exportBlacklist;
 
         const importBtn = document.createElement('button');
-        importBtn.textContent = 'Import Blacklist / Blacklist importieren';
+        importBtn.textContent = 'Import Blacklist';
         importBtn.style.flex = '1';
         importBtn.style.cursor = 'pointer';
 
@@ -399,9 +546,10 @@
         panel.appendChild(fileInput);
     }
 
+    // Export blacklist as JSON file
     function exportBlacklist() {
         const dataStr = JSON.stringify(localBlacklist, null, 2);
-        const blob = new Blob([dataStr], {type: 'application/json'});
+        const blob = new Blob([dataStr], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -410,185 +558,52 @@
         URL.revokeObjectURL(url);
     }
 
+    // Import blacklist from JSON file
     function importBlacklist(file) {
         const reader = new FileReader();
         reader.onload = function(e) {
             try {
                 const data = JSON.parse(e.target.result);
-                if (Array.isArray(data) && data.every(e => e.pattern && e.mode && ['domain','prefix','exact'].includes(e.mode))) {
+                if (Array.isArray(data) && data.every(e => e.pattern && e.mode && ['domain', 'prefix', 'exact'].includes(e.mode))) {
                     localBlacklist = data;
                     GM_setValue(BLACKLIST_KEY, localBlacklist);
                     if (document.getElementById('ia-saver-blacklist-panel')) {
                         createBlacklistGUI(); // Recreate GUI to refresh
                     }
                     combinedBlacklist = mergeBlacklists(localBlacklist, externalBlacklist);
-                    alert('Blacklist imported successfully. / Blacklist erfolgreich importiert.');
+                    alert('Blacklist imported successfully.');
                 } else {
-                    alert('Invalid blacklist data format in file. / Ungültiges Blacklist-Datenformat in der Datei.');
+                    alert('Invalid blacklist data format in file.');
                 }
             } catch (ex) {
-                alert('Error parsing blacklist file: ' + ex.message + ' / Fehler beim Parsen der Blacklist-Datei: ' + ex.message);
+                alert('Error parsing blacklist file: ' + ex.message);
             }
         };
         reader.readAsText(file);
     }
 
-    // Register menu command to toggle blacklist GUI / Menüeintrag zum Öffnen der Blacklist-GUI registrieren
-    GM_registerMenuCommand('Manage Blacklist / Blacklist verwalten', toggleBlacklistGUI);
+    // Register menu command for blacklist management
+    GM_registerMenuCommand('Manage Blacklist', toggleBlacklistGUI);
 
-    // Main logic: load external blacklist, merge, check blacklist, then archive if needed / Hauptlogik: externe Blacklist laden, zusammenführen, prüfen, und archivieren
+    // Main function
     (async function main() {
         externalBlacklist = await loadExternalBlacklist();
         combinedBlacklist = mergeBlacklists(localBlacklist, externalBlacklist);
 
-        if (isBlacklisted(location.href)) {
-            console.log('[IA Saver] URL is blacklisted, skipping archiving: / URL auf Blacklist, Archivierung übersprungen:', location.href);
-            showBadge('', 'gray', 'Archiving skipped (Blacklist) ⛔ / Archivierung übersprungen (Blacklist) ⛔', { faIconClass: 'fas fa-ban' });
-            return;
-        }
-
-        console.log(`[IA Saver] Checking archiving necessity for: ${location.href}`);
-        showBadge('', '#007bff', 'Checking archive status... 🔄 / Archivstatus prüfen... 🔄', { faIconClass: 'fas fa-spinner fa-spin' });
-
+        // Load current page without cookies to get final URL
         GM_xmlhttpRequest({
             method: 'GET',
             url: location.href,
             anonymous: true,
             onload: function(response) {
                 const finalUrl = response.finalUrl || location.href;
-                checkArchivingNecessity(finalUrl);
+                checkAndArchive(finalUrl);
             },
             onerror: function() {
-                const errMsg = '[IA Saver] Failed to load URL without cookies / URL konnte ohne Cookies nicht geladen werden';
-                console.error(errMsg);
-                showBadge('', '#ff2e2e', errMsg + ' ❗', { faIconClass: 'fas fa-exclamation-triangle' });
+                console.error('[IA Saver] Failed to load URL without cookies');
+                showBadge('red', 'Failed to load URL without cookies ❗', 'fas fa-exclamation-triangle');
             }
         });
     })();
-
-    // Check if archiving is needed / Prüfen, ob Archivierung notwendig ist
-    function checkArchivingNecessity(url) {
-        GM_xmlhttpRequest({
-            method: 'GET',
-            url: ARCHIVE_CHECK_URL + encodeURIComponent(url),
-            onload: function(response) {
-                try {
-                    const data = JSON.parse(response.responseText);
-                    if (!data.archived_snapshots || isEmpty(data.archived_snapshots)) {
-                        console.log(`[IA Saver] Archiving needed: No archive found for ${url} / Archivierung notwendig: Kein Archiv gefunden für ${url}`);
-                        archiveUrl(url, true);
-                    } else {
-                        const lastTimestamp = data.archived_snapshots.closest.timestamp;
-                        const lastSaveTime = parseTimestamp(lastTimestamp);
-                        if (Date.now() - lastSaveTime > FOUR_HOURS_MS) {
-                            console.log(`[IA Saver] Archiving needed: Last archive is older than 4 hours for ${url} (archived at ${lastTimestamp}) / Archivierung notwendig: Letztes Archiv älter als 4 Stunden für ${url} (archiviert am ${lastTimestamp})`);
-                            archiveUrl(url, false);
-                        } else {
-                            const logMsg = `[IA Saver] Archiving not necessary, last archived at ${new Date(lastSaveTime).toLocaleString()} (${lastTimestamp}) / Archivierung nicht notwendig, zuletzt archiviert am ${new Date(lastSaveTime).toLocaleString()} (${lastTimestamp})`;
-                            console.log(logMsg);
-                            showBadge('', 'darkorange', logMsg + ' 🕒', { faIconClass: 'fas fa-clock', link: `https://web.archive.org/web/${lastTimestamp}/${url}` });
-                        }
-                    }
-                } catch (e) {
-                    const errMsg = '[IA Saver] Error parsing archive availability response / Fehler beim Parsen der Archiv-Verfügbarkeitsantwort';
-                    console.error(errMsg, e);
-                    showBadge('', '#ff2e2e', errMsg + ' ❗', { faIconClass: 'fas fa-exclamation-triangle' });
-                }
-            },
-            onerror: function() {
-                const errMsg = '[IA Saver] Failed to query archive availability / Archiv-Verfügbarkeit konnte nicht abgefragt werden';
-                console.error(errMsg);
-                showBadge('', 'orange', errMsg + ' ⚠️', { faIconClass: 'fas fa-exclamation-circle' });
-            }
-        });
-    }
-
-    // Start archiving URL / Starte Archivierung der URL
-    function archiveUrl(url, isFirst) {
-        console.log(`[IA Saver] Starting archiving for ${url}... / Starte Archivierung für ${url}...`);
-        GM_xmlhttpRequest({
-            method: 'GET',
-            url: ARCHIVE_SAVE_URL + url,
-            onload: function(response) {
-                if (response.status === 200 || response.status === 201) {
-                    const logMsg = `[IA Saver] ${isFirst ? 'First archiving' : 'Archived'} successfully! (https://web.archive.org/web/${url}) / Erfolgreich archiviert! (https://web.archive.org/web/${url})`;
-                    console.log(logMsg);
-                    showBadge('', 'green', logMsg + ' ✅', { faIconClass: 'fas fa-check', link: `https://web.archive.org/web/*/${url}` });
-                } else {
-                    const errMsg = `[IA Saver] Archiving error: ${response.status} - ${response.statusText} / Archivierungsfehler: ${response.status} - ${response.statusText}`;
-                    console.error(errMsg);
-                    showBadge('', '#ff2e2e', errMsg + ' ❗', { faIconClass: 'fas fa-exclamation-triangle' });
-                }
-            },
-            onerror: function() {
-                const errMsg = '[IA Saver] Archiving failed / Archivierung fehlgeschlagen';
-                console.error(errMsg);
-                showBadge('', '#ff2e2e', errMsg + ' ❗', { faIconClass: 'fas fa-exclamation-triangle' });
-            }
-        });
-    }
-
-    // Show status badge / Zeige Status-Badge
-    function showBadge(text, bgColor, tooltip, options = {}) {
-        if (!SHOW_BADGES) return;
-
-        const existing = document.getElementById('ia-saver-badge');
-        if (existing) existing.remove();
-
-        const badge = document.createElement('div');
-        badge.id = 'ia-saver-badge';
-        badge.style.position = 'fixed';
-        badge.style.bottom = '5px';
-        badge.style.right = '5px';
-        badge.style.background = bgColor;
-        badge.style.color = '#fff';
-        badge.style.padding = '4px';
-        badge.style.fontSize = '16px';
-        badge.style.fontFamily = 'Arial, sans-serif';
-        badge.style.cursor = 'pointer';
-        badge.style.userSelect = 'none';
-        badge.style.zIndex = '999999999';
-        badge.style.borderRadius = '50%';
-        badge.style.display = 'flex';
-        badge.style.alignItems = 'center';
-        badge.style.justifyContent = 'center';
-        badge.style.width = '24px';
-        badge.style.height = '24px';
-        badge.title = tooltip;
-
-        if (options.faIconClass) {
-            const icon = document.createElement('i');
-            icon.className = options.faIconClass;
-            icon.style.fontSize = '16px';
-            badge.appendChild(icon);
-        } else {
-            const iconSpan = document.createElement('span');
-            iconSpan.textContent = options.icon || '?';
-            badge.appendChild(iconSpan);
-        }
-
-        badge.onclick = () => {
-            const link = options.link || `https://web.archive.org/web/*/${location.href}`;
-            window.open(link, '_blank');
-        };
-
-        document.documentElement.insertBefore(badge, document.documentElement.firstChild);
-    }
-
-    // Parse timestamp from archive.org response / Zeitstempel aus archive.org Antwort parsen
-    function parseTimestamp(ts) {
-        const year = ts.substr(0,4);
-        const month = ts.substr(4,2);
-        const day = ts.substr(6,2);
-        const hour = ts.substr(8,2);
-        const min = ts.substr(10,2);
-        const sec = ts.substr(12,2);
-        return Date.UTC(year, month - 1, day, hour, min, sec);
-    }
-
-    // Check if object is empty / Prüfe, ob Objekt leer ist
-    function isEmpty(obj) {
-        return !obj || Object.keys(obj).length === 0;
-    }
 
 })();
