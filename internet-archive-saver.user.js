@@ -1,8 +1,10 @@
 // ==UserScript==
 // @name         Internet Archive Saver
-// @description  Saves every visited page to the Internet Archive if it hasn't been saved in the last 4 hours, showing smaller FontAwesome icons as status badges and additional console logs when archiving is needed or started.
-// @namespace    https://github.com/gbzret4d
-// @homepage     https://github.com/gbzret4d
+// @description  Saves every visited page to the Internet Archive if it hasn't been saved in the last 4 hours, showing smaller FontAwesome icons as status badges and additional console logs when archiving is needed or started. / Speichert jede besuchte Seite im Internet Archive, falls sie nicht in den letzten 4 Stunden gespeichert wurde, mit kleineren FontAwesome-Icons als Statusanzeigen und zusätzlichen Konsolenlogs.
+// @namespace    https://github.com/gbzret4d/internet-archive-auto-saver
+// @homepage     https://github.com/gbzret4d/internet-archive-auto-saver
+// @updateURL    https://raw.githubusercontent.com/gbzret4d/internet-archive-auto-saver/main/internet-archive-saver.user.js
+// @downloadURL  https://raw.githubusercontent.com/gbzret4d/internet-archive-auto-saver/main/internet-archive-saver.user.js
 // @author       gbzret4d
 // @version      1.0
 // @grant        GM_xmlhttpRequest
@@ -12,18 +14,16 @@
 // @connect      raw.githubusercontent.com
 // @noframes
 // @match        *://*/*
-// @updateURL    https://raw.githubusercontent.com/gbzret4d/internet-archive-saver/main/internet-archive-saver.user.js
-// @downloadURL  https://raw.githubusercontent.com/gbzret4d/internet-archive-saver/main/internet-archive-saver.user.js
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    // --- Konfiguration ---
-    const LOAD_EXTERNAL_BLACKLIST = true; // <--- hier aktivieren/deaktivieren
-    const EXTERNAL_BLACKLIST_URL = 'https://raw.githubusercontent.com/gbzret4d/internet-archive-saver/main/blacklist.json';
+    // --- Configuration / Konfiguration ---
+    const LOAD_EXTERNAL_BLACKLIST = true; // Set to false to disable loading external blacklist / Setze auf false, um externe Blacklist zu deaktivieren
+    const EXTERNAL_BLACKLIST_URL = 'https://raw.githubusercontent.com/gbzret4d/internet-archive-auto-saver/main/blacklist.json';
 
-    // Inject FontAwesome CSS from CDNJS
+    // Inject FontAwesome CSS from CDNJS / FontAwesome CSS von CDNJS einfügen
     function injectFontAwesome() {
         if (document.getElementById('fontawesome-css')) return;
         const link = document.createElement('link');
@@ -35,29 +35,29 @@
     }
     injectFontAwesome();
 
-    const SHOW_BADGES = true;
+    const SHOW_BADGES = true; // Show status badges / Status-Badges anzeigen
     const ARCHIVE_CHECK_URL = 'https://archive.org/wayback/available?url=';
     const ARCHIVE_SAVE_URL = 'https://web.archive.org/save/';
-    const FOUR_HOURS_MS = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+    const FOUR_HOURS_MS = 4 * 60 * 60 * 1000; // 4 hours in milliseconds / 4 Stunden in Millisekunden
 
     const BLACKLIST_KEY = 'ia_saver_blacklist';
 
-    // Lokale Blacklist (editierbar)
+    // Local blacklist stored in userscript manager / Lokale Blacklist im Userscript-Manager gespeichert
     let localBlacklist = GM_getValue(BLACKLIST_KEY, []);
 
-    // Falls alte Speicherung als Array von Strings vorliegt, konvertieren auf neues Format
+    // Convert old string array format to new object format if necessary / Konvertiere altes Format in neues Format
     if (localBlacklist.length && typeof localBlacklist[0] === 'string') {
         localBlacklist = localBlacklist.map(pat => ({ pattern: pat, mode: 'domain' }));
         GM_setValue(BLACKLIST_KEY, localBlacklist);
     }
 
-    // Externe Blacklist (read-only)
+    // External blacklist loaded from URL (read-only) / Externe Blacklist geladen von URL (nur lesbar)
     let externalBlacklist = [];
 
-    // Kombinierte Blacklist (lokal + extern)
+    // Combined blacklist (local + external) / Kombinierte Blacklist (lokal + extern)
     let combinedBlacklist = [];
 
-    // Lade externe Blacklist (wenn aktiviert)
+    // Load external blacklist from URL if enabled / Lade externe Blacklist, falls aktiviert
     function loadExternalBlacklist() {
         return new Promise((resolve) => {
             if (!LOAD_EXTERNAL_BLACKLIST || !EXTERNAL_BLACKLIST_URL) {
@@ -74,27 +74,27 @@
                             if (Array.isArray(data) && data.every(e => e.pattern && e.mode && ['domain','prefix','exact'].includes(e.mode))) {
                                 resolve(data);
                             } else {
-                                console.warn('[IA Saver] Invalid external blacklist format');
+                                console.warn('[IA Saver] Invalid external blacklist format / Ungültiges Format der externen Blacklist');
                                 resolve([]);
                             }
                         } catch(e) {
-                            console.warn('[IA Saver] Failed to parse external blacklist JSON', e);
+                            console.warn('[IA Saver] Failed to parse external blacklist JSON / Externe Blacklist JSON konnte nicht geparst werden', e);
                             resolve([]);
                         }
                     } else {
-                        console.warn('[IA Saver] Failed to load external blacklist, status:', response.status);
+                        console.warn('[IA Saver] Failed to load external blacklist, status: ' + response.status + ' / Externe Blacklist konnte nicht geladen werden, Status: ' + response.status);
                         resolve([]);
                     }
                 },
                 onerror: function() {
-                    console.warn('[IA Saver] Error loading external blacklist');
+                    console.warn('[IA Saver] Error loading external blacklist / Fehler beim Laden der externen Blacklist');
                     resolve([]);
                 }
             });
         });
     }
 
-    // Kombiniere lokal + extern, vermeide Duplikate
+    // Merge local and external blacklists, avoiding duplicates / Füge lokale und externe Blacklists zusammen, ohne Duplikate
     function mergeBlacklists(localList, externalList) {
         const combined = [...localList];
         for (const extEntry of externalList) {
@@ -105,7 +105,7 @@
         return combined;
     }
 
-    // Blacklist prüfen gegen kombinierte Liste
+    // Check if URL is blacklisted in combined list / Prüfe, ob URL auf Blacklist steht (kombiniert)
     function isBlacklisted(url) {
         try {
             const u = new URL(url);
@@ -126,27 +126,12 @@
                 return false;
             });
         } catch(e) {
-            console.warn('[IA Saver] Invalid URL in blacklist check:', url, e);
+            console.warn('[IA Saver] Invalid URL in blacklist check / Ungültige URL bei Blacklist-Prüfung:', url, e);
             return false;
         }
     }
 
-    // Blacklist GUI arbeitet nur mit lokale Blacklist (editable)
-    // ... (deine bestehende GUI Funktionen unverändert, nur "blacklist" durch "localBlacklist" ersetzen)
-
-    // GUI Funktionen:
-    // - createBlacklistGUI()
-    // - refreshBlacklistUI()
-    // - toggleBlacklistGUI()
-    // - exportBlacklist()
-    // - importBlacklist()
-    // - addExportImportButtons()
-    // - validateInput()
-
-    // Für Kürze hier nur toggleBlacklistGUI und GUI-Erstellung (kopiere den Original-Code, ersetze "blacklist" durch "localBlacklist")
-
-    // ------ GUI Code (angepasst) ------
-
+    // Blacklist GUI (only local blacklist editable) / Blacklist-GUI (nur lokale Blacklist bearbeitbar)
     function createBlacklistGUI() {
         if (!document.body) {
             document.addEventListener('DOMContentLoaded', createBlacklistGUI);
@@ -184,7 +169,7 @@
 
         const closeBtn = document.createElement('button');
         closeBtn.textContent = '×';
-        closeBtn.title = 'Close';
+        closeBtn.title = 'Close / Schließen';
         closeBtn.style.background = 'transparent';
         closeBtn.style.border = 'none';
         closeBtn.style.color = '#fff';
@@ -208,7 +193,7 @@
             Domain: blocks all pages on the domain and its subdomains (e.g. <i>google.com</i>).<br>
             Prefix: blocks all URLs starting with the pattern (use * at the end, e.g. <i>https://www.google.com/search*</i>).<br>
             Exact: blocks only the exact URL (e.g. <i>https://www.google.com/search?q=test</i>).<br>
-            Examples:<br>
+            Beispiele / Examples:<br>
             • domain: google.com<br>
             • prefix: https://www.google.com/search*<br>
             • exact: https://www.google.com/search?q=test&ie=UTF-8
@@ -223,14 +208,14 @@
 
         const input = document.createElement('input');
         input.type = 'text';
-        input.placeholder = 'Domain, prefix* or exact URL';
+        input.placeholder = 'Domain, prefix* or exact URL / Domain, Präfix* oder exakte URL';
         input.style.flexGrow = '1';
         input.style.minWidth = '170px';
         input.style.padding = '6px';
 
         const select = document.createElement('select');
         select.style.padding = '6px';
-        select.title = 'Select blacklist mode';
+        select.title = 'Select blacklist mode / Blacklist-Modus wählen';
 
         const optionDomain = document.createElement('option');
         optionDomain.value = 'domain';
@@ -249,7 +234,7 @@
         select.appendChild(optionExact);
 
         const addButton = document.createElement('button');
-        addButton.textContent = 'Add';
+        addButton.textContent = 'Add / Hinzufügen';
         addButton.style.cursor = 'pointer';
         addButton.style.padding = '6px 12px';
 
@@ -272,7 +257,7 @@
             list.innerHTML = '';
             if (localBlacklist.length === 0) {
                 const li = document.createElement('li');
-                li.textContent = 'No entries in blacklist.';
+                li.textContent = 'No entries in blacklist. / Keine Einträge in der Blacklist.';
                 li.style.fontStyle = 'italic';
                 li.style.color = '#aaa';
                 list.appendChild(li);
@@ -292,7 +277,7 @@
 
                 const delBtn = document.createElement('button');
                 delBtn.textContent = 'X';
-                delBtn.title = 'Remove this entry';
+                delBtn.title = 'Remove this entry / Entfernen';
                 delBtn.style.background = 'red';
                 delBtn.style.color = 'white';
                 delBtn.style.border = 'none';
@@ -304,7 +289,6 @@
                     localBlacklist.splice(index, 1);
                     GM_setValue(BLACKLIST_KEY, localBlacklist);
                     refreshList();
-                    // Nach Änderung lokale + extern erneut zusammenführen
                     combinedBlacklist = mergeBlacklists(localBlacklist, externalBlacklist);
                 });
 
@@ -346,7 +330,7 @@
             }
 
             if (localBlacklist.some(e => e.pattern === val && e.mode === mode)) {
-                alert('This entry is already in the blacklist.');
+                alert('This entry is already in the blacklist. / Dieser Eintrag ist bereits in der Blacklist.');
                 return;
             }
 
@@ -386,13 +370,13 @@
         container.style.gap = '10px';
 
         const exportBtn = document.createElement('button');
-        exportBtn.textContent = 'Export Blacklist';
+        exportBtn.textContent = 'Export Blacklist / Blacklist exportieren';
         exportBtn.style.flex = '1';
         exportBtn.style.cursor = 'pointer';
         exportBtn.onclick = exportBlacklist;
 
         const importBtn = document.createElement('button');
-        importBtn.textContent = 'Import Blacklist';
+        importBtn.textContent = 'Import Blacklist / Blacklist importieren';
         importBtn.style.flex = '1';
         importBtn.style.cursor = 'pointer';
 
@@ -435,38 +419,36 @@
                     localBlacklist = data;
                     GM_setValue(BLACKLIST_KEY, localBlacklist);
                     if (document.getElementById('ia-saver-blacklist-panel')) {
-                        refreshList();
+                        createBlacklistGUI(); // Recreate GUI to refresh
                     }
                     combinedBlacklist = mergeBlacklists(localBlacklist, externalBlacklist);
-                    alert('Blacklist imported successfully.');
+                    alert('Blacklist imported successfully. / Blacklist erfolgreich importiert.');
                 } else {
-                    alert('Invalid blacklist data format in file.');
+                    alert('Invalid blacklist data format in file. / Ungültiges Blacklist-Datenformat in der Datei.');
                 }
             } catch (ex) {
-                alert('Error parsing blacklist file: ' + ex.message);
+                alert('Error parsing blacklist file: ' + ex.message + ' / Fehler beim Parsen der Blacklist-Datei: ' + ex.message);
             }
         };
         reader.readAsText(file);
     }
 
-    // -----------------------------
+    // Register menu command to toggle blacklist GUI / Menüeintrag zum Öffnen der Blacklist-GUI registrieren
+    GM_registerMenuCommand('Manage Blacklist / Blacklist verwalten', toggleBlacklistGUI);
 
-    // GM-Menu Command für Blacklist GUI
-    GM_registerMenuCommand('Manage Blacklist', toggleBlacklistGUI);
-
-    // Starte Ablauf: externe Blacklist laden, kombinieren, prüfen und archivieren
+    // Main logic: load external blacklist, merge, check blacklist, then archive if needed / Hauptlogik: externe Blacklist laden, zusammenführen, prüfen, und archivieren
     (async function main() {
         externalBlacklist = await loadExternalBlacklist();
         combinedBlacklist = mergeBlacklists(localBlacklist, externalBlacklist);
 
         if (isBlacklisted(location.href)) {
-            console.log('[IA Saver] URL is blacklisted, skipping archiving:', location.href);
-            showBadge('', 'gray', 'Archiving skipped (Blacklist) ⛔', { faIconClass: 'fas fa-ban' });
+            console.log('[IA Saver] URL is blacklisted, skipping archiving: / URL auf Blacklist, Archivierung übersprungen:', location.href);
+            showBadge('', 'gray', 'Archiving skipped (Blacklist) ⛔ / Archivierung übersprungen (Blacklist) ⛔', { faIconClass: 'fas fa-ban' });
             return;
         }
 
         console.log(`[IA Saver] Checking archiving necessity for: ${location.href}`);
-        showBadge('', '#007bff', 'Checking archive status... 🔄', { faIconClass: 'fas fa-spinner fa-spin' });
+        showBadge('', '#007bff', 'Checking archive status... 🔄 / Archivstatus prüfen... 🔄', { faIconClass: 'fas fa-spinner fa-spin' });
 
         GM_xmlhttpRequest({
             method: 'GET',
@@ -477,15 +459,14 @@
                 checkArchivingNecessity(finalUrl);
             },
             onerror: function() {
-                const errMsg = '[IA Saver] Failed to load URL without cookies';
+                const errMsg = '[IA Saver] Failed to load URL without cookies / URL konnte ohne Cookies nicht geladen werden';
                 console.error(errMsg);
                 showBadge('', '#ff2e2e', errMsg + ' ❗', { faIconClass: 'fas fa-exclamation-triangle' });
             }
         });
     })();
 
-    // Restlicher Code unverändert (checkArchivingNecessity, archiveUrl, showBadge, parseTimestamp, isEmpty, ...)
-
+    // Check if archiving is needed / Prüfen, ob Archivierung notwendig ist
     function checkArchivingNecessity(url) {
         GM_xmlhttpRequest({
             method: 'GET',
@@ -494,58 +475,60 @@
                 try {
                     const data = JSON.parse(response.responseText);
                     if (!data.archived_snapshots || isEmpty(data.archived_snapshots)) {
-                        console.log(`[IA Saver] Archiving needed: No archive found for ${url}`);
+                        console.log(`[IA Saver] Archiving needed: No archive found for ${url} / Archivierung notwendig: Kein Archiv gefunden für ${url}`);
                         archiveUrl(url, true);
                     } else {
                         const lastTimestamp = data.archived_snapshots.closest.timestamp;
                         const lastSaveTime = parseTimestamp(lastTimestamp);
                         if (Date.now() - lastSaveTime > FOUR_HOURS_MS) {
-                            console.log(`[IA Saver] Archiving needed: Last archive is older than 4 hours for ${url} (archived at ${lastTimestamp})`);
+                            console.log(`[IA Saver] Archiving needed: Last archive is older than 4 hours for ${url} (archived at ${lastTimestamp}) / Archivierung notwendig: Letztes Archiv älter als 4 Stunden für ${url} (archiviert am ${lastTimestamp})`);
                             archiveUrl(url, false);
                         } else {
-                            const logMsg = `[IA Saver] Archiving not necessary, last archived at ${new Date(lastSaveTime).toLocaleString()} (${lastTimestamp})`;
+                            const logMsg = `[IA Saver] Archiving not necessary, last archived at ${new Date(lastSaveTime).toLocaleString()} (${lastTimestamp}) / Archivierung nicht notwendig, zuletzt archiviert am ${new Date(lastSaveTime).toLocaleString()} (${lastTimestamp})`;
                             console.log(logMsg);
                             showBadge('', 'darkorange', logMsg + ' 🕒', { faIconClass: 'fas fa-clock', link: `https://web.archive.org/web/${lastTimestamp}/${url}` });
                         }
                     }
                 } catch (e) {
-                    const errMsg = '[IA Saver] Error parsing archive availability response';
+                    const errMsg = '[IA Saver] Error parsing archive availability response / Fehler beim Parsen der Archiv-Verfügbarkeitsantwort';
                     console.error(errMsg, e);
                     showBadge('', '#ff2e2e', errMsg + ' ❗', { faIconClass: 'fas fa-exclamation-triangle' });
                 }
             },
             onerror: function() {
-                const errMsg = '[IA Saver] Failed to query archive availability';
+                const errMsg = '[IA Saver] Failed to query archive availability / Archiv-Verfügbarkeit konnte nicht abgefragt werden';
                 console.error(errMsg);
                 showBadge('', 'orange', errMsg + ' ⚠️', { faIconClass: 'fas fa-exclamation-circle' });
             }
         });
     }
 
+    // Start archiving URL / Starte Archivierung der URL
     function archiveUrl(url, isFirst) {
-        console.log(`[IA Saver] Starting archiving for ${url}...`);
+        console.log(`[IA Saver] Starting archiving for ${url}... / Starte Archivierung für ${url}...`);
         GM_xmlhttpRequest({
             method: 'GET',
             url: ARCHIVE_SAVE_URL + url,
             onload: function(response) {
                 if (response.status === 200 || response.status === 201) {
-                    const logMsg = `[IA Saver] ${isFirst ? 'First archiving' : 'Archived'} successfully! (https://web.archive.org/web/${url})`;
+                    const logMsg = `[IA Saver] ${isFirst ? 'First archiving' : 'Archived'} successfully! (https://web.archive.org/web/${url}) / Erfolgreich archiviert! (https://web.archive.org/web/${url})`;
                     console.log(logMsg);
                     showBadge('', 'green', logMsg + ' ✅', { faIconClass: 'fas fa-check', link: `https://web.archive.org/web/*/${url}` });
                 } else {
-                    const errMsg = `[IA Saver] Archiving error: ${response.status} - ${response.statusText}`;
+                    const errMsg = `[IA Saver] Archiving error: ${response.status} - ${response.statusText} / Archivierungsfehler: ${response.status} - ${response.statusText}`;
                     console.error(errMsg);
                     showBadge('', '#ff2e2e', errMsg + ' ❗', { faIconClass: 'fas fa-exclamation-triangle' });
                 }
             },
             onerror: function() {
-                const errMsg = '[IA Saver] Archiving failed';
+                const errMsg = '[IA Saver] Archiving failed / Archivierung fehlgeschlagen';
                 console.error(errMsg);
                 showBadge('', '#ff2e2e', errMsg + ' ❗', { faIconClass: 'fas fa-exclamation-triangle' });
             }
         });
     }
 
+    // Show status badge / Zeige Status-Badge
     function showBadge(text, bgColor, tooltip, options = {}) {
         if (!SHOW_BADGES) return;
 
@@ -592,6 +575,7 @@
         document.documentElement.insertBefore(badge, document.documentElement.firstChild);
     }
 
+    // Parse timestamp from archive.org response / Zeitstempel aus archive.org Antwort parsen
     function parseTimestamp(ts) {
         const year = ts.substr(0,4);
         const month = ts.substr(4,2);
@@ -602,6 +586,7 @@
         return Date.UTC(year, month - 1, day, hour, min, sec);
     }
 
+    // Check if object is empty / Prüfe, ob Objekt leer ist
     function isEmpty(obj) {
         return !obj || Object.keys(obj).length === 0;
     }
