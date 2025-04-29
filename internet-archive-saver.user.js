@@ -6,13 +6,14 @@
 // @updateURL    https://raw.githubusercontent.com/gbzret4d/internet-archive-auto-saver/main/internet-archive-saver.user.js
 // @downloadURL  https://raw.githubusercontent.com/gbzret4d/internet-archive-auto-saver/main/internet-archive-saver.user.js
 // @author       gbzret4d
-// @version      1.1
+// @version      1.2
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
 // @connect      raw.githubusercontent.com
 // @connect      web.archive.org
+// @connect      archive.org
 // @noframes
 // @match        *://*/*
 // ==/UserScript==
@@ -243,6 +244,7 @@
 
         if (!data || !data.archived_snapshots || !data.archived_snapshots.closest) {
             console.log('[IA Saver] No archive found, archiving now:', url);
+            await sleep(2000); // Warte 2 Sekunden vor Archivierung
             archiveUrl(url);
             return;
         }
@@ -252,6 +254,7 @@
 
         if (Date.now() - lastArchiveTime > 4 * 60 * 60 * 1000) {
             console.log('[IA Saver] Archive outdated, archiving now:', url);
+            await sleep(2000); // Warte 2 Sekunden vor Archivierung
             archiveUrl(url);
         } else {
             console.log('[IA Saver] Archive up to date:', url);
@@ -266,12 +269,18 @@
         GM_xmlhttpRequest({
             method: 'GET',
             url: ARCHIVE_SAVE_URL + encodeURIComponent(url),
+            anonymous: false, // Cookies werden gesendet, wichtig bei login-accounts
+            headers: {
+                'User-Agent': navigator.userAgent,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            },
             onload: res => {
                 if (res.status >= 200 && res.status < 300) {
                     console.log('[IA Saver] Archived successfully:', url);
                     showBadge('green', 'Archived successfully ✅', 'fas fa-check', `https://web.archive.org/web/*/${url}`);
                 } else {
                     console.error('[IA Saver] Archive failed:', res.status, res.statusText);
+                    console.error('Response body:', res.responseText);
                     showBadge('red', 'Archive failed ❗', 'fas fa-exclamation-triangle');
                 }
             },
