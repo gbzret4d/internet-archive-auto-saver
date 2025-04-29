@@ -6,7 +6,7 @@
 // @updateURL    https://raw.githubusercontent.com/gbzret4d/internet-archive-auto-saver/main/internet-archive-saver.user.js
 // @downloadURL  https://raw.githubusercontent.com/gbzret4d/internet-archive-auto-saver/main/internet-archive-saver.user.js
 // @author       gbzret4d
-// @version      1.2
+// @version      1.3
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -273,6 +273,7 @@
             headers: {
                 'User-Agent': navigator.userAgent,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Referer': 'https://web.archive.org/',
             },
             onload: res => {
                 if (res.status >= 200 && res.status < 300) {
@@ -280,6 +281,7 @@
                     showBadge('green', 'Archived successfully ✅', 'fas fa-check', `https://web.archive.org/web/*/${url}`);
                 } else {
                     console.error('[IA Saver] Archive failed:', res.status, res.statusText);
+                    console.error('Response headers:', res.responseHeaders);
                     console.error('Response body:', res.responseText);
                     showBadge('red', 'Archive failed ❗', 'fas fa-exclamation-triangle');
                 }
